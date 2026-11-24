@@ -21,11 +21,16 @@
   <div class="row"><button id="mute">ミュート</button><button id="leave">切断</button></div>
   <div id="audios" style="display:none"></div>
 <script>
-const params = new URLSearchParams(location.hash.slice(1));
+// ハッシュで受け取ったら sessionStorage に退避（再読み込みされても情報が消えないように）
+let params = new URLSearchParams(location.hash.slice(1));
+if (params.get('t') && params.get('r')) {
+  try { sessionStorage.setItem('gasvc_params', location.hash.slice(1)); } catch (e) {}
+} else {
+  try { params = new URLSearchParams(sessionStorage.getItem('gasvc_params') || ''); } catch (e) {}
+}
 const token = params.get('t'), roomName = params.get('r'), label = params.get('n') || '通話';
 document.getElementById('title').textContent = '🔊 ' + label;
 document.title = label;
-history.replaceState(null, '', location.pathname); // トークンをURLから消す
 
 let context, room, me, audio, publication, muted = false, left = false;
 const $ = id => document.getElementById(id);
@@ -38,6 +43,7 @@ function say(text) {
 async function start() {
   if (!token || !roomName) { say('情報が足りません。チャット画面から入り直してください'); return; }
   $('start').style.display = 'none';
+  if (typeof skyway_room === 'undefined') { say('SkyWayを読み込めませんでした。通信状況を確認して再読み込みしてください'); $('start').style.display = ''; return; }
   say('接続中...');
   try {
     const { SkyWayContext, SkyWayRoom, SkyWayStreamFactory } = skyway_room;
@@ -68,7 +74,8 @@ async function start() {
     }
     $('leave').style.display = '';
   } catch (e) {
-    say('接続に失敗しました。チャット画面から入り直してください');
+    say('接続に失敗しました: ' + (e && (e.message || e.name) || e) + '（チャット画面から入り直してください）');
+    $('start').style.display = '';
   }
 }
 
