@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>通話</title>
+<script src="https://cdn.jsdelivr.net/npm/@skyway-sdk/room/dist/skyway_room-latest.js"></script>
+<style>
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; background:#1e1f22; color:#fff; font-family:"Segoe UI",Meiryo,sans-serif; }
+  h1 { font-size:18px; color:#43d17e; }
+  #status { font-size:13px; color:#b5bac1; text-align:center; padding:0 16px; }
+  button { border:none; border-radius:6px; padding:12px 20px; font-size:15px; font-weight:700; color:#fff; cursor:pointer; }
+  #start { background:#5865f2; } #mute { background:#383a40; display:none; } #mute.muted { background:#da373c; } #leave { background:#da373c; display:none; }
+  .row { display:flex; gap:10px; }
+</style>
+</head>
+<body>
+  <h1 id="title">🔊 通話</h1>
+  <div id="status">「参加する」を押すとマイクの許可が求められます</div>
+  <button id="start">参加する</button>
+  <div class="row"><button id="mute">ミュート</button><button id="leave">切断</button></div>
+  <div id="audios" style="display:none"></div>
+<script>
+const params = new URLSearchParams(location.hash.slice(1));
+const token = params.get('t'), roomName = params.get('r'), label = params.get('n') || '通話';
+document.getElementById('title').textContent = '🔊 ' + label;
+document.title = label;
+history.replaceState(null, '', location.pathname); // トークンをURLから消す
+
+let context, room, me, audio, publication, muted = false, left = false;
+const $ = id => document.getElementById(id);
+
+function say(text) {
+  $('status').textContent = text;
+  try { if (window.opener) window.opener.postMessage({ type: 'gasvc-status', text }, '*'); } catch (e) {}
+}
+
+async function start() {
+  if (!token || !roomName) { say('情報が足りません。チャット画面から入り直してください'); return; }
+  $('start').style.display = 'none';
+  say('接続中...');
+  try {
+    const { SkyWayContext, SkyWayRoom, SkyWayStreamFactory } = skyway_room;
+    context = await SkyWayContext.Create(token);
+    room = await SkyWayRoom.FindOrCreate(context, { type: 'p2p', name: roomName });
+    me = await room.join();
+
+    const sub = async pub => {
+      if (!pub || pub.publisher.id === me.id || pub.contentType !== 'audio') return;
+      try {
+        const { stream } = await me.subscribe(pub.id);
+        let el = document.getElementById('a_' + pub.id);
+        if (!el) { el = document.createElement('audio'); el.id = 'a_' + pub.id; el.autoplay = true; el.playsInline = true; $('audios').appendChild(el); }
+        stream.attach(el); el.play().catch(() => {});
+      } catch (e) {}
+    };
+    room.publications.forEach(sub);
+    room.onStreamPublished.add(ev => sub(ev.publication));
+    room.onStreamUnpublished.add(ev => { const el = document.getElementById('a_' + ev.publication.id); if (el) el.remove(); });
+
+    try {
+      audio = await SkyWayStreamFactory.createMicrophoneAudioStream();
+      publication = await me.publish(audio);
+      say('通話中（マイクON）');
+      $('mute').style.display = '';
+    } catch (e) {
+      say('マイクを使えません（聞くだけ参加）');
+    }
+    $('leave').style.display = '';
+  } catch (e) {
+    say('接続に失敗しました。チャット画面から入り直してください');
+  }
+}
+
+async function setMuted(m) {
+  muted = m;
+  $('mute').textContent = muted ? 'ミュート解除' : 'ミュート';
+  $('mute').classList.toggle('muted', muted);
+  if (publication) { try { await (muted ? publication.disable() : publication.enable()); } catch (e) {} }
+  say(muted ? '通話中（ミュート）' : '通話中（マイクON）');
+}
+
+async function leave() {
+  if (left) return; left = true;
+  try { if (audio) audio.release(); } catch (e) {}
+  try { if (me) await me.leave(); } catch (e) {}
+  try { if (room) await room.dispose(); } catch (e) {}
+  try { if (context) context.dispose(); } catch (e) {}
+  try { if (window.opener) window.opener.postMessage({ type: 'gasvc-left' }, '*'); } catch (e) {}
+  window.close();
+  say('切断しました。このタブは閉じて大丈夫です');
+}
+
+$('start').onclick = start;
+$('mute').onclick = () => setMuted(!muted);
+$('leave').onclick = leave;
+window.addEventListener('message', ev => {
+  if (ev.source !== window.opener || !ev.data) return;
+  if (ev.data.type === 'gasvc-mute') setMuted(!!ev.data.muted);
+  if (ev.data.type === 'gasvc-leave') leave();
+});
+window.addEventListener('pagehide', () => { if (!left && me) { try { me.leave(); } catch (e) {} } });
+</script>
+</body>
+</html>
